@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { rgbColor } from "@earendil-works/pi-tui";
+
+test("Pi 0.99 concrete system-theme colors override ANSI and theme-name guesses", () => {
+  const restore = setGlobalTheme({ name: "system", appearance: "light",
+    colors: { text: rgbColor(12, 34, 56) }, getFgAnsi: () => "\x1b[39m" });
+  try { assert.equal(themeTextHex(), "#0c2238"); } finally { restore(); }
+  const restoreAppearance = setGlobalTheme({ name: "system", appearance: "light", getFgAnsi: () => "\x1b[39m" });
+  try { assert.equal(themeTextHex(), "#1f2328"); } finally { restoreAppearance(); }
+});
 import {
   ansiForegroundHex,
   FALLBACK_TEXT_COLOR,

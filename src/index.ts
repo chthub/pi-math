@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import { loadSvgMathRendererOptions } from "./config.js";
-import { installMarkdownMathPatch } from "./markdown-patch.js";
+import { installMarkdownMathPatch, type MathPatchController } from "./markdown-patch.js";
 import { createTerminalMathRenderer, type TerminalMathRenderer } from "./renderer.js";
 
 function errorMessage(error: unknown): string {
@@ -23,14 +23,19 @@ export default async function piMathExtension(pi: ExtensionAPI): Promise<void> {
     loadFailure = errorMessage(error);
   }
 
-  const patch = renderer ? installMarkdownMathPatch(renderer) : undefined;
+  let patch: MathPatchController | undefined;
+  let rearm: ReturnType<typeof setImmediate> | undefined;
 
   pi.on("session_start", (_event, ctx) => {
     // pi-streaming-guard replaces Markdown.render wholesale on session_start,
     // which would leave pi-math bypassed. Defer one macrotask so every
     // session_start handler has run, then re-layer pi-math on top and delegate
     // into whatever render won.
-    if (patch) setImmediate(() => patch.rearm());
+    if (ctx.mode === "tui" && renderer) {
+      patch ??= installMarkdownMathPatch(renderer);
+      if (rearm) clearImmediate(rearm);
+      rearm = setImmediate(() => { rearm = undefined; patch?.rearm(); });
+    }
     if (loadFailure && ctx.mode === "tui") {
       ctx.ui.notify(`pi-math failed to load: ${loadFailure}`, "error");
     }
@@ -43,7 +48,11 @@ export default async function piMathExtension(pi: ExtensionAPI): Promise<void> {
   });
 
   pi.on("session_shutdown", () => {
+    if (rearm) clearImmediate(rearm);
+    rearm = undefined;
     patch?.uninstall();
+    patch = undefined;
+    renderer?.clear();
   });
 
   pi.registerCommand("math-render", {

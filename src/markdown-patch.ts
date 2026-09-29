@@ -4,6 +4,7 @@ import {
   getCapabilities,
   getCellDimensions,
   type DefaultTextStyle,
+  type MarkdownOptions,
 } from "@earendil-works/pi-tui";
 import { insertFormulaImages, type FormulaImagePlacement } from "./image-layout.js";
 import type { TerminalMathRenderer } from "./renderer.js";
@@ -20,6 +21,7 @@ type MarkdownInternals = {
   text: string;
   paddingX?: number;
   defaultTextStyle?: DefaultTextStyle;
+  options?: MarkdownOptions;
 };
 
 type MarkdownRender = (this: Markdown, width: number) => string[];
@@ -103,17 +105,13 @@ function matchingLineage(
  */
 export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPatchController {
   const baseRender = Markdown.prototype.render;
-  let nestedRender: MarkdownRender = baseRender;
   let enabled = true;
   let installed = true;
   let transformCache = new WeakMap<Markdown, CachedTransform>();
   let transformLineages: TransformLineage[] = [];
   let lineageUsage = 0;
 
-  // One stable function identity delegates through a mutable target so rearm()
-  // can re-layer the wrapper over renders installed later without growing the
-  // call chain — and so disabled/uninstalled wrappers degrade to pass-through.
-  const patchedRender: MarkdownRender = function (width: number): string[] {
+  const renderMath = function (this: Markdown, width: number, delegate: MarkdownRender): string[] {
     const markdown = this as unknown as MarkdownInternals;
     const source = markdown.text;
     const protocol = getCapabilities().images;
@@ -127,7 +125,7 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
       isTransientReasoning ||
       !containsPotentialMath(source)
     ) {
-      return nestedRender.call(this, width);
+      return delegate.call(this, width);
     }
 
     const paddingX =
@@ -193,18 +191,50 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
     }
 
     if (transformed === source || placements.length === 0) {
-      return nestedRender.call(this, width);
+      return delegate.call(this, width);
     }
 
     markdown.text = transformed;
     try {
-      const textLines = stripGeneratedMathFenceLines(nestedRender.call(this, width));
+      const textLines = stripGeneratedMathFenceLines(delegate.call(this, width));
       return insertFormulaImages(textLines, placements, { renderWidth: width, paddingX });
     } finally {
       markdown.text = source;
     }
   };
 
+  // Pi 0.99 applies native Markdown transformers inside render(). Run that
+  // text-only stage before rasterization, once, then insert images after layout.
+  // It cannot replace this hook: it has no access to final terminal rows.
+  const rendering = new WeakSet<Markdown>();
+  const delegates = new WeakMap<MarkdownRender, MarkdownRender>();
+  const wrap = (delegate: MarkdownRender): MarkdownRender => {
+    const wrapped: MarkdownRender = function (width) {
+      // Each generation keeps its own delegate. A cooperative wrapper can retain
+      // an older generation without cycles or bypassing the renderer beneath it.
+      if (rendering.has(this)) return delegate.call(this, width);
+      rendering.add(this);
+      const markdown = this as unknown as MarkdownInternals;
+      const source = markdown.text;
+      const options = markdown.options;
+      try {
+        if (enabled && getCapabilities().images &&
+            markdown.defaultTextStyle?.italic !== true && options?.transform) {
+          const contentWidth = Math.max(1, width - (markdown.paddingX ?? 0) * 2);
+          markdown.text = options.transform(source, contentWidth);
+          markdown.options = { ...options, transform: undefined };
+        }
+        return renderMath.call(this, width, delegate);
+      } finally {
+        markdown.text = source;
+        markdown.options = options;
+        rendering.delete(this);
+      }
+    };
+    delegates.set(wrapped, delegate);
+    return wrapped;
+  };
+  let patchedRender = wrap(baseRender);
   Markdown.prototype.render = patchedRender;
   return {
     isEnabled: () => enabled,
@@ -217,8 +247,8 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
       lineageUsage = 0;
     },
     rearm() {
-      if (!installed || Markdown.prototype.render === patchedRender) return;
-      nestedRender = Markdown.prototype.render as MarkdownRender;
+      if (!installed || delegates.has(Markdown.prototype.render)) return;
+      patchedRender = wrap(Markdown.prototype.render);
       Markdown.prototype.render = patchedRender;
     },
     uninstall() {
@@ -226,13 +256,10 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
       transformCache = new WeakMap();
       transformLineages = [];
       lineageUsage = 0;
-      if (installed && Markdown.prototype.render === patchedRender) {
-        Markdown.prototype.render = nestedRender;
-      }
-      // A wholesale replacement installed after this patch may still hold the
-      // patched function; once that replacement unwinds, the disabled wrapper
-      // must pass through to the render captured before this patch existed.
-      nestedRender = baseRender;
+      const delegate = delegates.get(Markdown.prototype.render);
+      if (installed && delegate) Markdown.prototype.render = delegate;
+      // Older generations retained by other extensions now pass through to
+      // their own delegates; never overwrite a renderer owned by someone else.
       installed = false;
     },
   };

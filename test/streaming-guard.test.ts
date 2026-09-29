@@ -88,12 +88,15 @@ function createHarness(): Harness {
  */
 function installGuardFacsimile(stock: MarkdownRender) {
   const captured = Markdown.prototype.render as MarkdownRender;
+  let calls = 0;
   const render: MarkdownRender = function (width) {
+    calls++;
     return stock.call(this, width);
   };
   Markdown.prototype.render = render;
   return {
     render,
+    get calls() { return calls; },
     dispose() {
       if (Markdown.prototype.render === render) {
         Markdown.prototype.render = captured;
@@ -111,7 +114,9 @@ test("pi-math re-arms on top of wholesale Markdown.render replacements", async (
   const renderLines = () => new Markdown(formula, 0, 0, markdownTheme).render(80);
 
   await piMathExtension(harness.pi);
-  const patchedRender = Markdown.prototype.render as MarkdownRender;
+  assert.equal(Markdown.prototype.render, stockRender);
+  await harness.fire("session_start");
+  let patchedRender = Markdown.prototype.render as MarkdownRender;
   assert.notEqual(patchedRender, stockRender);
   assert.equal(imageLineCount(renderLines()), 1);
 
@@ -123,7 +128,8 @@ test("pi-math re-arms on top of wholesale Markdown.render replacements", async (
   await harness.fire("session_start");
   await nextMacrotask();
   await nextMacrotask();
-  assert.equal(Markdown.prototype.render, patchedRender);
+  assert.notEqual(Markdown.prototype.render, firstGuard.render);
+  patchedRender = Markdown.prototype.render;
   assert.equal(imageLineCount(renderLines()), 1);
 
   // Guard churn that restores its captured render is a no-op for the layering.
@@ -138,7 +144,8 @@ test("pi-math re-arms on top of wholesale Markdown.render replacements", async (
 
   // The next turn re-heals without waiting for a session restart.
   await harness.fire("turn_start");
-  assert.equal(Markdown.prototype.render, patchedRender);
+  assert.notEqual(Markdown.prototype.render, secondGuard.render);
+  patchedRender = Markdown.prototype.render;
   assert.equal(imageLineCount(renderLines()), 1);
 
   // "/math-render off" must delegate cleanly to the render beneath pi-math.
@@ -146,6 +153,22 @@ test("pi-math re-arms on top of wholesale Markdown.render replacements", async (
   assert.equal(imageLineCount(renderLines()), 0);
   await harness.command("math-render", "on");
   assert.equal(imageLineCount(renderLines()), 1);
+
+  // Cooperative patches capture our wrapper rather than replacing it wholesale.
+  // Rearming must not recurse through that captured wrapper.
+  const captured = Markdown.prototype.render;
+  Markdown.prototype.render = function (width) { return captured.call(this, width); };
+  await harness.fire("turn_start");
+  const callsBefore = secondGuard.calls;
+  assert.equal(imageLineCount(renderLines()), 1);
+  assert.equal(secondGuard.calls, callsBefore + 1, "cooperative reentry preserves the previous guard");
+  await harness.command("math-render", "off");
+  assert.equal(imageLineCount(renderLines()), 0);
+  await harness.command("math-render", "on");
+  // Return to the wholesale replacement so its disposal assertions stay exact.
+  Markdown.prototype.render = secondGuard.render;
+  await harness.fire("turn_start");
+  patchedRender = Markdown.prototype.render;
 
   // Guard disposal restores pi-math's wrapper it captured.
   secondGuard.dispose();

@@ -83,8 +83,31 @@ test("extension injects terminal images without changing source messages", async
   } as unknown as ExtensionAPI;
 
   await piMathExtension(mockPi);
+  assert.equal(Markdown.prototype.render, originalRender, "resource discovery must not patch the host");
+  for (const handler of events.get("session_start") ?? []) await handler({}, context);
   try {
     assert.notEqual(Markdown.prototype.render, originalRender);
+
+    // Native Pi 0.99 transforms must run before rasterization, exactly once.
+    let transforms = 0;
+    const transform = (source: string, width: number) => {
+      transforms++;
+      assert.equal(source, "FORMULA");
+      assert.equal(width, 76);
+      return "$$x^2$$";
+    };
+    const transformed = new Markdown("FORMULA", 2, 0, markdownTheme, undefined, { transform });
+    assert.equal(kittyImageCount(transformed.render(80)), 1);
+    assert.equal(transforms, 1);
+    assert.equal((transformed as unknown as { text: string }).text, "FORMULA");
+    transformed.invalidate();
+    assert.equal(kittyImageCount(transformed.render(80)), 1);
+    assert.equal(transforms, 2);
+    const throwing = new Markdown("FORMULA", 0, 0, markdownTheme, undefined, {
+      transform: () => { throw new Error("native transform failed"); },
+    });
+    assert.throws(() => throwing.render(80), /native transform failed/);
+    assert.equal((throwing as unknown as { text: string }).text, "FORMULA");
 
     const inlineSource = String.raw`Einstein wrote $E=mc^2$.`;
     const inline = new Markdown(inlineSource, 0, 0, markdownTheme);

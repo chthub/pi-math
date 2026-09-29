@@ -1,3 +1,5 @@
+import { colorToHex, type Color } from "@earendil-works/pi-tui";
+
 const HEX_COLOR_PATTERN = /^#[\da-f]{6}$/i;
 const TRUECOLOR_PATTERN = /\x1b\[38;2;(\d+);(\d+);(\d+)m/;
 const INDEXED_PATTERN = /\x1b\[38;5;(\d+)m/;
@@ -85,6 +87,8 @@ export function ansiForegroundHex(styled: string): string | undefined {
 
 interface InteractiveThemeLike {
   name?: unknown;
+  appearance?: unknown;
+  colors?: { text?: Color };
   fg?: unknown;
   getFgAnsi?: unknown;
 }
@@ -104,6 +108,8 @@ function interactiveTheme(): InteractiveThemeLike | undefined {
  * inspectable RGB value.
  */
 function themeNameFallback(theme: InteractiveThemeLike): string | undefined {
+  if (theme.appearance === "light") return BUILTIN_LIGHT_TEXT;
+  if (theme.appearance === "dark") return BUILTIN_DARK_TEXT;
   if (typeof theme.name !== "string") return undefined;
   if (/light/i.test(theme.name)) return BUILTIN_LIGHT_TEXT;
   if (/dark/i.test(theme.name)) return BUILTIN_DARK_TEXT;
@@ -115,6 +121,13 @@ export function themeTextHex(): string | undefined {
   const theme = interactiveTheme();
   if (!theme) return undefined;
 
+  // Pi 0.99 exposes concrete terminal-default colors, including system themes.
+  // Prefer them over lossy ANSI sampling or guesses based on the theme name.
+  try {
+    if (theme.colors?.text) return colorToHex(theme.colors.text);
+  } catch {
+    // Tolerate older/custom theme objects and fall back to their style helpers.
+  }
   let styled: unknown;
   try {
     if (typeof theme.getFgAnsi === "function") {

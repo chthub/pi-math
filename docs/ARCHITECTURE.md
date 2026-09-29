@@ -46,7 +46,7 @@ The Markdown patch temporarily replaces the component's internal text only durin
 
 ### Coexistence with wholesale render patches
 
-Some extensions replace `Markdown.prototype.render` outright instead of chaining (pi-streaming-guard's incremental renderer does this on `session_start` and on mid-session toggles). The pi-math wrapper keeps one stable function identity that delegates through a mutable target and re-asserts itself on top after `session_start` handlers settle and on every `turn_start`. While another patch owns the prototype, formulas fall back to their original LaTeX; once re-layered, images render through the delegate pipeline — again sourced from immutable line arrays, so delegate caches are never poisoned. Disposal in any order unwinds to a functional renderer.
+Some extensions replace `Markdown.prototype.render` outright instead of chaining (pi-streaming-guard's incremental renderer does this on `session_start` and on mid-session toggles). The pi-math wrapper re-asserts itself on top after TUI `session_start` handlers settle and on every `turn_start`. Each rearmed generation captures an immutable delegate; cooperative wrappers retaining an earlier generation cannot create recursion or bypass another extension's renderer. Reentrant calls skip duplicate math work while preserving the delegate chain. While another patch owns the prototype, formulas fall back to their original LaTeX; once re-layered, images render through the delegate pipeline — again sourced from immutable line arrays, so delegate caches are never poisoned. Disposal in any order unwinds to a functional renderer.
 
 ### One display scale
 
@@ -151,7 +151,7 @@ This avoids repeating MathJax conversion when only color or terminal width chang
 
 The Markdown patch uses a `WeakMap` keyed by each `Markdown` component. It stores transformed marker text and image placements for one source/layout/protocol combination. Pi recreates the active assistant's Markdown components on every streaming delta, so the patch also retains at most 32 append-only source lineages per layout. Completed formulas reuse their prior image IDs, keeping unchanged TUI lines byte-identical without retaining an unbounded message history. Whole-block italic reasoning bypasses image rendering because it is transient and rebuilt token by token.
 
-`/math-render clear` clears both renderer caches, the component transform cache, and streaming lineages. `session_shutdown` removes the prototype patch. Pi's differential renderer deletes Kitty images whose IDs disappear from rendered lines.
+`/math-render clear` clears both renderer caches, the component transform cache, and streaming lineages. `session_shutdown` cancels pending rearm work, clears raster caches, and removes the prototype patch idempotently. Discovery and non-TUI sessions do not mutate Markdown prototypes. Pi 0.99's native `MarkdownOptions.transform` runs exactly once before formula rasterization; source/options are restored even if it throws. The text-only `registerMarkdownTransformer` API cannot replace the post-layout hook needed for terminal image rows. Pi's differential renderer deletes Kitty images whose IDs disappear from rendered lines.
 
 ## Initialization and runtime
 
