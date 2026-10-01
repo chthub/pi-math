@@ -39,7 +39,7 @@ Pi intentionally disables terminal images inside tmux and screen. In those envir
 
 ## Installation
 
-**0.5.7 compatibility:** tested against Pi 0.99.0. Pi coding-agent and TUI are host-provided wildcard peers, with exact development pins. Rendering patches are installed only for TUI sessions, composed after native Markdown text transforms, and removed on shutdown. Formula colors use Pi's concrete theme colors, including the adaptive system theme. Cooperative and wholesale render patches remain supported.
+**0.5.8 compatibility:** tested against Pi 1.0.0. Pi coding-agent and TUI are host-provided wildcard peers, with exact development pins. Rendering patches are installed only for TUI sessions, composed after native Markdown text transforms, and removed on shutdown. Formula colors use Pi's concrete theme colors, including the adaptive system theme. Cooperative and wholesale render patches remain supported. `bun run test:pi` verifies actual modular and bundled Pi CLI host identity, offscreen rasterization, and cleanup without a terminal UI or credentials.
 
 Install the npm package:
 
