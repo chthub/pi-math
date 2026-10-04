@@ -33,6 +33,7 @@
     "test": "node --import tsx --test test/*.test.ts",
     "check": "bun run typecheck && bun run test",
     "test:pi": "node scripts/test-pi-compat.mjs",
+    "test:vscode": "node scripts/test-vscode-redraw.mjs",
     "visual": "node --import tsx test/visual-fixture.ts"
   },
   "peerDependencies": {

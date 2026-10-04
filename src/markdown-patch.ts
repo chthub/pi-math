@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { insertFormulaImages, type FormulaImagePlacement } from "./image-layout.js";
 import type { TerminalMathRenderer } from "./renderer.js";
+import { FormulaRowCache, usesRowImages } from "./raster-rows.js";
 import { resolveFormulaColor } from "./text-color.js";
 import {
   containsPotentialMath,
@@ -110,6 +111,7 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
   let transformCache = new WeakMap<Markdown, CachedTransform>();
   let transformLineages: TransformLineage[] = [];
   let lineageUsage = 0;
+  const rowCache = new FormulaRowCache();
 
   const renderMath = function (this: Markdown, width: number, delegate: MarkdownRender): string[] {
     const markdown = this as unknown as MarkdownInternals;
@@ -135,7 +137,8 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
     const color = formulaColor(markdown);
     const cells = getCellDimensions();
     const contentWidth = Math.max(1, width - paddingX * 2);
-    const layoutKey = `${width}:${paddingX}:${color}:${protocol}:${cells.widthPx}:${cells.heightPx}`;
+    const rowImages = protocol === "kitty" && usesRowImages();
+    const layoutKey = `${width}:${paddingX}:${color}:${protocol}:${cells.widthPx}:${cells.heightPx}:${rowImages}`;
     const maxBlockRows = Math.max(1, Math.floor(MAX_RASTER_HEIGHT_PX / cells.heightPx));
 
     let transformed: string;
@@ -163,10 +166,20 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
         const identity = formulaIdentity(latex, display, context);
         const imageId = lineage?.imageIds.get(identity) ?? allocateMathImageId();
         imageIds.set(identity, imageId);
+        const rowImageIds = !inline && rowImages && raster.rows > 1
+          ? Array.from({ length: raster.rows }, (_, row) => {
+              if (row === 0) return imageId;
+              const rowIdentity = `${identity}:row:${row}`;
+              const rowId = lineage?.imageIds.get(rowIdentity) ?? allocateMathImageId();
+              imageIds.set(rowIdentity, rowId);
+              return rowId;
+            })
+          : undefined;
         const marker = imageMarker(imageId, placements.length, raster.columns, inline);
         placements.push({
           marker,
           imageId,
+          rowImageIds,
           raster,
           inline,
           fallbackText: source.slice(context.start, context.end),
@@ -197,7 +210,7 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
     markdown.text = transformed;
     try {
       const textLines = stripGeneratedMathFenceLines(delegate.call(this, width));
-      return insertFormulaImages(textLines, placements, { renderWidth: width, paddingX });
+      return insertFormulaImages(textLines, placements, { renderWidth: width, paddingX }, rowCache);
     } finally {
       markdown.text = source;
     }
@@ -245,6 +258,7 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
       transformCache = new WeakMap();
       transformLineages = [];
       lineageUsage = 0;
+      rowCache.clear();
     },
     rearm() {
       if (!installed || delegates.has(Markdown.prototype.render)) return;
@@ -256,6 +270,7 @@ export function installMarkdownMathPatch(renderer: TerminalMathRenderer): MathPa
       transformCache = new WeakMap();
       transformLineages = [];
       lineageUsage = 0;
+      rowCache.clear();
       const delegate = delegates.get(Markdown.prototype.render);
       if (installed && delegate) Markdown.prototype.render = delegate;
       // Older generations retained by other extensions now pass through to

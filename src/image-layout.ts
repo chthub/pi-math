@@ -1,10 +1,13 @@
-import { getCapabilities, renderImage } from "@earendil-works/pi-tui";
+import { allocateImageId, getCapabilities, renderImage } from "@earendil-works/pi-tui";
 import { kittyPlaceholderSupport, renderKittyVirtualImage } from "./kitty-graphics.js";
+import { FormulaRowCache, splitFormulaRasterRows, usesRowImages, type FormulaImageRaster } from "./raster-rows.js";
 import type { FormulaRaster } from "./svg-renderer.js";
 
 export interface FormulaImagePlacement {
   marker: string;
   imageId: number;
+  /** Stable, distinct IDs: VS Code supports only one placement per image. */
+  rowImageIds?: number[];
   raster: FormulaRaster;
   inline: boolean;
   fallbackText: string;
@@ -15,17 +18,21 @@ export interface FormulaImageArea {
   paddingX: number;
 }
 
-function renderNativeImage(placement: FormulaImagePlacement) {
+function renderNativeImage(
+  placement: FormulaImagePlacement,
+  raster: FormulaImageRaster = placement.raster,
+  imageId: number = placement.imageId,
+) {
   return renderImage(
-    placement.raster.base64Data,
+    raster.base64Data,
     {
-      widthPx: placement.raster.widthPx,
-      heightPx: placement.raster.heightPx,
+      widthPx: raster.widthPx,
+      heightPx: raster.heightPx,
     },
     {
-      maxWidthCells: placement.raster.columns,
-      maxHeightCells: placement.raster.rows,
-      imageId: placement.imageId,
+      maxWidthCells: raster.columns,
+      maxHeightCells: raster.rows,
+      imageId,
       moveCursor: false,
     },
   );
@@ -34,18 +41,37 @@ function renderNativeImage(placement: FormulaImagePlacement) {
 function renderBlockPlacement(
   placement: FormulaImagePlacement,
   area: FormulaImageArea,
+  rowCache?: FormulaRowCache,
 ): string[] | undefined {
   const capabilities = getCapabilities();
   if (!capabilities.images) return undefined;
 
   const contentWidth = Math.max(1, area.renderWidth - area.paddingX * 2);
   if (placement.raster.columns > contentWidth) return undefined;
-  const rendered = renderNativeImage(placement);
-  if (!rendered) return undefined;
-
   const left =
     area.paddingX + Math.max(0, Math.floor((contentWidth - placement.raster.columns) / 2));
   const prefix = " ".repeat(left);
+  if (capabilities.images === "kitty" && usesRowImages() && placement.raster.rows > 1) {
+    try {
+      const rows = rowCache?.get(placement.raster) ?? splitFormulaRasterRows(placement.raster);
+      placement.rowImageIds ??= rows.map((_, row) => row === 0 ? placement.imageId : allocateImageId());
+      if (placement.rowImageIds.length !== rows.length) return undefined;
+      const lines: string[] = [];
+      for (const [row, raster] of rows.entries()) {
+        const rendered = renderNativeImage(placement, raster, placement.rowImageIds[row]!);
+        if (!rendered || rendered.rows !== 1) return undefined;
+        lines.push(`${prefix}${rendered.sequence}`);
+      }
+      // Every image occupies its own row. Later clears/scrolling cannot erase
+      // lower portions of an earlier image, in either fullscreen or regular mode.
+      return lines;
+    } catch {
+      return undefined; // Crop/PNG failures preserve the original LaTeX.
+    }
+  }
+
+  const rendered = renderNativeImage(placement);
+  if (!rendered) return undefined;
   if (capabilities.images === "kitty") {
     return [
       `${prefix}${rendered.sequence}`,
@@ -87,6 +113,7 @@ export function insertFormulaImages(
   lines: string[],
   placements: FormulaImagePlacement[],
   area: FormulaImageArea,
+  rowCache?: FormulaRowCache,
 ): string[] {
   if (placements.length === 0) return lines;
   const output: string[] = [];
@@ -97,7 +124,7 @@ export function insertFormulaImages(
     const line = lines[lineIndex]!;
     const block = blockPlacements.find(({ marker }) => line.includes(marker));
     if (block) {
-      const imageLines = renderBlockPlacement(block, area);
+      const imageLines = renderBlockPlacement(block, area, rowCache);
       const blockLines =
         imageLines ?? [line.replace(block.marker, () => block.fallbackText)];
       // Place one empty row above and below each formula so it never sits

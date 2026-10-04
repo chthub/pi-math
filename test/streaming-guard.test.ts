@@ -106,6 +106,8 @@ function installGuardFacsimile(stock: MarkdownRender) {
 }
 
 test("pi-math re-arms on top of wholesale Markdown.render replacements", async () => {
+  const originalTerminalProgram = process.env.TERM_PROGRAM;
+  process.env.TERM_PROGRAM = "kitty";
   setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
   setCellDimensions({ widthPx: 9, heightPx: 18 });
   const stockRender = Markdown.prototype.render as MarkdownRender;
@@ -184,6 +186,8 @@ test("pi-math re-arms on top of wholesale Markdown.render replacements", async (
   assert.equal(Markdown.prototype.render, secondGuard.render);
 
   setCapabilities({ images: null, trueColor: false, hyperlinks: false });
+  if (originalTerminalProgram === undefined) delete process.env.TERM_PROGRAM;
+  else process.env.TERM_PROGRAM = originalTerminalProgram;
   Markdown.prototype.render = stockRender;
   assert.equal(Markdown.prototype.render, stockRender);
 });

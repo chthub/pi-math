@@ -61,6 +61,8 @@ function imageColumns(line: string): number {
 }
 
 test("extension injects terminal images without changing source messages", async () => {
+  const originalTerminalProgram = process.env.TERM_PROGRAM;
+  process.env.TERM_PROGRAM = "kitty";
   setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
   setCellDimensions({ widthPx: 9, heightPx: 18 });
   const originalRender = Markdown.prototype.render;
@@ -226,6 +228,8 @@ Second:
   } finally {
     for (const handler of events.get("session_shutdown") ?? []) await handler({}, context);
     setCapabilities({ images: null, trueColor: false, hyperlinks: false });
+    if (originalTerminalProgram === undefined) delete process.env.TERM_PROGRAM;
+    else process.env.TERM_PROGRAM = originalTerminalProgram;
   }
 
   assert.equal(Markdown.prototype.render, originalRender);

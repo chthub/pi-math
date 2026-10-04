@@ -36,6 +36,7 @@ source Markdown
 | `src/svg-renderer.ts` | Safe MathJax initialization, SVG extraction, sizing, alpha-bound checks, Resvg rasterization, and two-level caches |
 | `src/lru-cache.ts` | Entry- and byte-bounded weighted LRU storage |
 | `src/image-layout.ts` | Protocol selection, display centering, row reservation, and inline placement |
+| `src/raster-rows.ts` | VS Code one-row PNG cropping and session-owned byte-bounded crop cache |
 | `src/kitty-graphics.ts` | Kitty Unicode virtual placements, payload chunking, and cell placeholders |
 
 ## Core invariants
@@ -125,6 +126,27 @@ Known Kitty/Ghostty environments use placeholders. Other Kitty-protocol terminal
 ### Display formulas
 
 Display and standalone formulas are centered inside the Markdown content width after component padding. Each block reserves one empty row above and below the image so formulas never sit flush against neighboring text or each other. Kitty emits the image sequence on the first occupied row and reserves the remaining rows. iTerm2 reserves preceding rows and emits its image with a cursor-up offset and `height=auto`.
+
+### VS Code row images
+
+For `TERM_PROGRAM=vscode` with Kitty capability, multi-row blocks use one PNG per
+terminal row instead of a first-row image followed by reserved blanks. Pi's
+fullscreen renderer clears each subsequent row; VS Code's cell-backed image
+storage can erase tiles of a preceding multi-row image in those clears. Independent
+one-row images prevent that overlap without wrapping or modifying TUI internals.
+They also scroll/clamp naturally at integer viewport row boundaries.
+
+Resvg crops adjacent half-open intervals of the completed PNG at native raster
+resolution. All source pixels are covered exactly once, including rounded canvas
+heights. Each row has a different image ID (VS Code cannot retain multiple
+placements of a single ID), with IDs kept in the existing streaming lineage.
+Single-row and inline formulas, Kitty/Ghostty placeholders, and iTerm2 blocks are
+unchanged. Cropping failures fall back to source LaTeX.
+
+A session-owned weighted cache retains at most 256 cropped formulas and 32 MiB,
+including cache keys and base64 row payloads. `/math-render clear` and patch
+uninstallation clear it. The transform layout key includes row-placement mode so
+cached Markdown transforms cannot mix VS Code and ordinary placements.
 
 ## MathJax safety and compatibility
 

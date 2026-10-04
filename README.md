@@ -2,6 +2,9 @@
 
 Render LaTeX in the Pi TUI as real, transparent terminal images.
 
+This fork adds VS Code compatibility for multi-row formula images without modifying
+Pi's TUI. It builds on [upstream pi-math](https://github.com/monotykamary/pi-math).
+
 pi-math uses MathJax for mathematical typesetting and Resvg for rasterization. It does not approximate formulas with Unicode glyphs or hand-built character geometry.
 
 ![Long-form English mathematics with inline and display MathJax rendered in Ghostty through Pi Markdown](docs/images/pi-math-showcase.png)
@@ -34,35 +37,45 @@ pi-math uses MathJax for mathematical typesetting and Resvg for rasterization. I
   - Full inline and display rendering: Ghostty and Kitty
   - Display rendering plus compatibility inline placement: WezTerm and Warp
   - Display rendering: iTerm2
+  - VS Code integrated terminal: compatibility rendering with images enabled and
+    the process-local Kitty override described below
 
 Pi intentionally disables terminal images inside tmux and screen. In those environments, and in terminals without a supported image protocol, pi-math leaves the original LaTeX visible.
 
 ## Installation
 
-**0.5.8 compatibility:** tested against Pi 1.0.0. Pi coding-agent and TUI are host-provided wildcard peers, with exact development pins. Rendering patches are installed only for TUI sessions, composed after native Markdown text transforms, and removed on shutdown. Formula colors use Pi's concrete theme colors, including the adaptive system theme. Cooperative and wholesale render patches remain supported. `bun run test:pi` verifies actual modular and bundled Pi CLI host identity, offscreen rasterization, and cleanup without a terminal UI or credentials.
+This fork builds on upstream 0.5.8. Its VS Code row-image path is covered by
+49 automated tests and offscreen redraw checks against Pi 1.0.0 and 1.0.2 in
+fullscreen and regular modes, and has been visually verified in a VS Code
+integrated terminal. Pi coding-agent and TUI remain host-provided wildcard peers;
+no host source patches are required.
 
-Install the npm package:
-
-```bash
-pi install npm:@monotykamary/pi-math
-```
-
-Or clone the repository into Pi's global extension directory:
+Install this fork:
 
 ```bash
-git clone https://github.com/monotykamary/pi-math.git \
-  ~/.pi/agent/extensions/pi-math
-cd ~/.pi/agent/extensions/pi-math
-bun install --production
+pi install git:github.com/chthub/pi-math
 ```
 
-Or keep the checkout elsewhere and symlink it:
+If the upstream npm package is already configured, remove it first to avoid loading
+two copies of the Markdown patch:
 
 ```bash
-cd /path/to/pi-math
-bun install --production
-ln -sfn "$PWD" ~/.pi/agent/extensions/pi-math
+pi remove npm:@monotykamary/pi-math
 ```
+
+The upstream npm package does not contain this fork's VS Code fix.
+
+For local development, clone this fork and register the checkout directly:
+
+```bash
+git clone https://github.com/chthub/pi-math.git
+cd pi-math
+bun install --frozen-lockfile --ignore-scripts
+pi install "$PWD"
+```
+
+Keep a checkout outside Pi's auto-discovered extension directories when using
+`pi install "$PWD"`; there is no need to create an additional extension symlink.
 
 Reload Pi after installation:
 
@@ -92,6 +105,39 @@ f(a)&=r.
 ```
 
 Ghostty and Kitty render embedded formulas as real one-row image cells, so prose, punctuation, and list items remain intact. Standalone and display formulas use centered image blocks. Other terminals use the safest protocol-specific behavior available; the Markdown source always remains unchanged.
+
+## VS Code terminal compatibility
+
+Enable terminal images and GPU acceleration in VS Code settings:
+
+```json
+{
+  "terminal.integrated.enableImages": true,
+  "terminal.integrated.gpuAcceleration": "auto"
+}
+```
+
+Pi does not auto-detect VS Code's image protocol. Start Pi in a VS Code integrated
+terminal with a process-local override:
+
+```bash
+PI_IMAGE_PROTOCOL=kitty pi
+```
+
+When `TERM_PROGRAM=vscode` and Pi reports Kitty images, multi-row display formulas
+are cropped into independent one-row PNGs. Later TUI row clears cannot erase the
+lower part of an already-drawn formula. Cropping preserves the completed formula's
+pixels, alpha, scale, centering, and source text; it does not re-typeset the formula.
+Each row has a distinct image ID retained across append-only streaming. Row crops
+are byte-cached and released on `/math-render clear` or shutdown. Other terminals
+and one-row/inline formulas retain their existing placement behavior. No Pi TUI
+source patch or terminal identity spoofing is required.
+
+This remains a compatibility path, not automatic protocol detection. Do not force
+Kitty globally or inside tmux/screen. After installation or changes, run `/reload`,
+then `/math-render status` to confirm image rendering is enabled with `kitty`.
+Check a multi-row display formula, scroll it, and resize the terminal. Unsupported
+terminals retain the source LaTeX. No terminal identity spoofing is needed.
 
 ## Commands
 
@@ -173,12 +219,22 @@ See [Architecture](docs/ARCHITECTURE.md) for module boundaries, cache behavior, 
 ```bash
 bun install
 bun run check
+bun run test:vscode
 bun run visual -- gallery
 bun run visual -- radical
 bun run visual -- aligned
 bun run visual -- complex
 bun run visual -- theory
 bun run visual -- inline
+```
+
+`bun run test:vscode` captures offscreen writes from the development Pi host in
+fullscreen and regular modes. It checks that later clears never overlap earlier
+formula row images, including streaming, resize, and viewport clipping. To test an
+installed host instead (without changing it or accessing credentials):
+
+```bash
+PI_MATH_TEST_HOST=/path/to/node_modules/@earendil-works/pi-coding-agent bun run test:vscode
 ```
 
 Set `MATH_WIDTH` to exercise a specific Markdown width:
