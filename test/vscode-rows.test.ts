@@ -3,6 +3,7 @@ import test from "node:test";
 import { Resvg } from "@resvg/resvg-js";
 import { Markdown, getPngDimensions, setCapabilities, setCellDimensions, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { insertFormulaImages, type FormulaImagePlacement } from "../src/image-layout.js";
+import { getKittyImagePlacement } from "@earendil-works/pi-tui/dist/terminal-image.js";
 import { installMarkdownMathPatch } from "../src/markdown-patch.js";
 import { FormulaRowCache, splitFormulaRasterRows, usesRowImages } from "../src/raster-rows.js";
 import { createTerminalMathRenderer } from "../src/renderer.js";
@@ -131,6 +132,31 @@ test("VS Code draws independent one-row images with unique stable IDs and source
     assert.equal(normal.filter(line => line.includes("\x1b_G")).length, 1);
     assert.match(imageHeader(normal[1]!), /r=4/);
   } finally {
+    if (original === undefined) delete process.env.TERM_PROGRAM;
+    else process.env.TERM_PROGRAM = original;
+    setCapabilities({ images: null, trueColor: false, hyperlinks: false });
+  }
+});
+
+test("VS Code formula uploads bypass a=p for display and inline images, even after terminal-mode changes", async () => {
+  const original = process.env.TERM_PROGRAM;
+  process.env.TERM_PROGRAM = "wezterm";
+  setCellDimensions({ widthPx: 9, heightPx: 18 });
+  setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+  const renderer = await createTerminalMathRenderer();
+  const patch = installMarkdownMathPatch(renderer);
+  try {
+    const markdown = new Markdown("Text $x^2$ here.\n\n$$x+y$$", 0, 0, theme);
+    markdown.render(80); // Registers native image metadata before switching modes.
+    process.env.TERM_PROGRAM = "vscode";
+    const lines = markdown.render(80).filter(line => line.includes("\x1b_G"));
+    assert.ok(lines.length >= 2);
+    for (const line of lines) {
+      assert.equal(getKittyImagePlacement(line), undefined, "must send full PNG after VS Code deletes data");
+      assert.match(imageHeader(line), /a=T/);
+    }
+  } finally {
+    patch.uninstall(); renderer.clear();
     if (original === undefined) delete process.env.TERM_PROGRAM;
     else process.env.TERM_PROGRAM = original;
     setCapabilities({ images: null, trueColor: false, hyperlinks: false });

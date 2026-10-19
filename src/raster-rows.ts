@@ -14,7 +14,7 @@ export function usesRowImages(environment: NodeJS.ProcessEnv = process.env): boo
 }
 
 /** Crop, never re-typeset or resize, the completed PNG into one image per terminal row. */
-export function splitFormulaRasterRows(raster: FormulaRaster): FormulaImageRaster[] {
+export function splitFormulaRasterRows(raster: FormulaImageRaster): FormulaImageRaster[] {
   if (
     !Number.isInteger(raster.rows) || raster.rows < 1 ||
     !Number.isInteger(raster.heightPx) || raster.heightPx < raster.rows

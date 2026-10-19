@@ -1,4 +1,4 @@
-import { allocateImageId, getCapabilities, renderImage } from "@earendil-works/pi-tui";
+import { allocateImageId, encodeKitty, getCapabilities, renderImage } from "@earendil-works/pi-tui";
 import { kittyPlaceholderSupport, renderKittyVirtualImage } from "./kitty-graphics.js";
 import { FormulaRowCache, splitFormulaRasterRows, usesRowImages, type FormulaImageRaster } from "./raster-rows.js";
 import type { FormulaRaster } from "./svg-renderer.js";
@@ -23,6 +23,20 @@ function renderNativeImage(
   raster: FormulaImageRaster = placement.raster,
   imageId: number = placement.imageId,
 ) {
+  if (getCapabilities().images === "kitty" && usesRowImages()) {
+    // VS Code's d=a deletes stored image data too. Do not register these IDs
+    // in renderImage's placement cache: every redraw must carry the PNG again.
+    // Formula lineages are separated by row-placement mode, keeping these IDs
+    // distinct from native cached placements while stable across text streaming.
+    return {
+      sequence: encodeKitty(raster.base64Data, {
+        columns: raster.columns, rows: raster.rows, imageId, moveCursor: false,
+      }),
+      columns: raster.columns,
+      rows: raster.rows,
+      imageId,
+    };
+  }
   return renderImage(
     raster.base64Data,
     {

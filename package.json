@@ -34,6 +34,9 @@
     "check": "bun run typecheck && bun run test",
     "test:pi": "node scripts/test-pi-compat.mjs",
     "test:vscode": "node scripts/test-vscode-redraw.mjs",
+    "test:images": "node scripts/test-ordinary-images.mjs",
+    "test:image-click": "node scripts/test-image-click.mjs",
+    "bench:images": "node scripts/benchmark-ordinary-images.mjs",
     "visual": "node --import tsx test/visual-fixture.ts"
   },
   "peerDependencies": {

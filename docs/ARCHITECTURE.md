@@ -27,7 +27,7 @@ source Markdown
 
 | Module | Responsibility |
 | --- | --- |
-| `src/index.ts` | Extension initialization, lifecycle hooks, diagnostics, and `/math-render` commands |
+| `src/index.ts` | Extension initialization, lifecycle hooks, diagnostics, `/math-render` and independent `/math-images` commands |
 | `src/config.ts` | Cross-platform environment configuration for macros, environments, and fonts |
 | `src/markdown-patch.ts` | Reversible `Markdown.render()` integration and per-component transform caching |
 | `src/text-color.ts` | Formula ink color from Pi's active theme `text` token, component default styles, or `PI_MATH_COLOR` |
@@ -36,7 +36,11 @@ source Markdown
 | `src/svg-renderer.ts` | Safe MathJax initialization, SVG extraction, sizing, alpha-bound checks, Resvg rasterization, and two-level caches |
 | `src/lru-cache.ts` | Entry- and byte-bounded weighted LRU storage |
 | `src/image-layout.ts` | Protocol selection, display centering, row reservation, and inline placement |
-| `src/raster-rows.ts` | VS Code one-row PNG cropping and session-owned byte-bounded crop cache |
+| `src/raster-rows.ts` | Shared one-row PNG cropping and formula-owned byte-bounded crop cache |
+| `src/ordinary-images.ts` | Reversible VS Code `Image.render()` adapter, fast/sharp bounded previews and independent row transmissions |
+| `src/compact-png.ts` | One-time lossless level-6 recompression of Resvg PNG scanlines, retaining smaller valid outputs only |
+| `src/image-click.ts` | Reversible Image/tool mouse routing; opens only plain clicks within ordinary-image bounds |
+| `src/vscode-image-opener.ts` | Explicit-open-only private PNG snapshots, bounded storage, VS Code CLI launch and shutdown cleanup |
 | `src/kitty-graphics.ts` | Kitty Unicode virtual placements, payload chunking, and cell placeholders |
 
 ## Core invariants
@@ -140,13 +144,108 @@ Resvg crops adjacent half-open intervals of the completed PNG at native raster
 resolution. All source pixels are covered exactly once, including rounded canvas
 heights. Each row has a different image ID (VS Code cannot retain multiple
 placements of a single ID), with IDs kept in the existing streaming lineage.
-Single-row and inline formulas, Kitty/Ghostty placeholders, and iTerm2 blocks are
-unchanged. Cropping failures fall back to source LaTeX.
+Single-row and inline formula geometry, Kitty/Ghostty placeholders, and iTerm2
+blocks are unchanged. Cropping failures fall back to source LaTeX.
+
+All VS Code formula placements now use `encodeKitty` directly rather than
+`renderImage`, including single-row and inline formulas. This avoids registering
+IDs in Pi's `a=p` upload cache: xterm's current `d=a` deletes data too. Mode-separated
+formula lineages keep these IDs distinct from native registered IDs, with stable
+transmissions across streaming. The change does not alter formula pixels/layout.
 
 A session-owned weighted cache retains at most 256 cropped formulas and 32 MiB,
 including cache keys and base64 row payloads. `/math-render clear` and patch
 uninstallation clear it. The transform layout key includes row-placement mode so
 cached Markdown transforms cannot mix VS Code and ordinary placements.
+
+### Ordinary image previews
+
+`ordinary-images.ts` wraps the public `Image.prototype.render` method only during
+TUI sessions. It delegates first, so Pi retains responsibility for image formats,
+EXIF-aware conversion, supported dimensions, width settings and native fallback.
+The wrapper consumes only the stock direct Kitty PNG sequence and blank reserved
+rows, never private `Image` fields. It does not intercept tool execution, messages,
+attachments or model inputs. Custom image protocols/encodings pass through.
+
+Activation requires `TERM_PROGRAM=vscode`, Kitty capability and no tmux/screen.
+Neither extension loading nor `/math-images on` changes protocol detection.
+`PI_MATH_VSCODE_IMAGES=0` disables the adapter by default. Formula and ordinary-image
+switches/caches are independent, including when MathJax initialization fails.
+
+The PNG is contained proportionally in a transparent integer-cell preview at 1x
+cell resolution by default (`fast`), or 2x in `sharp` mode, then cropped with the
+shared row helper. Only raster density changes, not terminal cell geometry.
+`PI_MATH_IMAGE_QUALITY=sharp` selects the old density at startup; `/math-images
+fast|sharp` switches the independent ordinary-image cache at runtime. Formula
+density is not affected.
+
+Each row is compacted once using `compactPng`: validate the simple Resvg RGBA8 PNG
+and chunk CRCs, bounded-inflate its IDAT stream, and re-deflate the exact filtered
+bytes at zlib level 6. There is no quantization or color/alpha change. Invalid or
+unknown PNG layouts and results that are not smaller retain the original bytes.
+This step runs before the raster enters the cache, never on a cache-hit scroll. Every row, including a
+single-row image, gets a **new ID distinct from the native Image ID** and uses
+`encodeKitty`, not `renderImage`. The latter registers metadata that lets Pi replace
+uploads with `a=p` placements; VS Code's current `d=a` behavior deletes data as well
+as placements, making that optimization incorrect. Unregistered row images always
+carry `a=T` plus PNG data when emitted. No fullscreen renderer patch is needed.
+
+A weighted LRU retains at most 128 results and 32 MiB. Weak associations between
+native line arrays and SHA-256 keys avoid re-hashing unchanged input without
+keeping extra input copies alive. Cached output has stable IDs/bytes, so text-only
+frames remain incremental. Image redraws still consume transmission bandwidth.
+Cache keys include cell dimensions and quality; width/source changes affect the
+native image sequence. Changing quality clears cached rows/failures, while choosing
+the current quality is a no-op. Clear/uninstall releases rows and failures. Rearm supports other render
+wrappers, and processed-array tracking avoids double conversion through chaining.
+
+Limits: 32 MiB input sequence, 32 megapixel source, 4 megapixel preview, at most
+256 columns and 128 rows. A conversion/limit failure is negatively cached and
+reported via `/math-images status`, while returning the untouched native output.
+This fallback is safe for Pi state but can retain the terminal's original image bug.
+The wrapper relies on host renderer semantics, so future Pi releases still need
+protocol tests and manual terminal checks despite requiring no installation patch.
+
+### Click-to-open ordinary images
+
+The ordinary-image renderer retains a weak association from each `Image` instance
+to its unmodified native cached lines. It does not copy another PNG, write files or
+launch processes during rendering. A weak reference identifies the latest rendered
+ordinary image for the keyboard command. Source extraction happens only when opening,
+from the host PNG before terminal preview downscaling.
+
+`image-click.ts` wraps `Image.handleMouse` for fullscreen plain left clicks only.
+It leaves press, release, drag, wheel, modifiers and right-margin clicks alone;
+Pi synthesizes a click only after a non-dragging release. Handling returns
+`render: false` to avoid an unnecessary image redraw. Existing handlers run first.
+Pi's self-framed `ToolExecutionComponent.handleMouse` currently omits its appended
+image children, so a second guarded wrapper forwards only those image rows using
+`selfRenderHeight`, `imageSpacers` and `imageComponents`, matching its render layout.
+Those are internal host fields, making actual-host tests important. Neither wrapper
+captures the mouse, changes rendered geometry or mutates installed core files.
+The extra self-shell bridge is gated on active VS Code/Kitty compatibility and the
+ordinary-image switch, after the original tool handler has run. It never adds image
+renders or forwards other extensions' handlers outside that scope.
+Rearm/uninstall follow the existing reversible-wrapper lifecycle.
+
+`/math-images open` provides the regular-mode/keyboard alternative. Clicks can be
+disabled independently with `/math-images click off` or `PI_MATH_IMAGE_OPEN=0`.
+Formula images are not part of this click map.
+
+The opener checks VS Code's environment/IPC availability, validates bounded PNG
+container/scanline data, and lazily writes a content-hash-named PNG to a private
+session directory. Directory/files use 0700/0600. It invokes `code --reuse-window`
+with an argument array, never a shell or a model-provided executable/path. Same-image
+concurrent clicks coalesce; repeated opens reuse the same path. At most 32 files /
+128 MiB are retained, without evicting snapshots currently used by editor tabs.
+The CLI runs in a new POSIX session/process group with a 10-second timeout and
+4096-byte combined, discarded output limit. On timeout/overflow the entire owned
+CLI group is killed, including non-exec wrapper children; the existing VS Code
+server is not targeted. The timeout remains until stream `close`, even if the
+wrapper exits earlier. Default native Windows launching is explicitly unsupported;
+Remote SSH on a POSIX host works regardless of the client OS. Shutdown blocks new
+opens, waits for active work and deletes only this session's temporary directory.
+Preview tabs therefore depend on session-lived files unless the user saves a copy.
 
 ## MathJax safety and compatibility
 
@@ -179,7 +278,7 @@ The Markdown patch uses a `WeakMap` keyed by each `Markdown` component. It store
 
 MathJax is initialized once when Pi loads the extension. Formula conversion and Resvg rasterization are synchronous after the asynchronous extension initialization step.
 
-pi-math itself performs no HTTP requests and launches no child processes. MathJax data, native Resvg code, optional font files, and Kitty's diacritic table are all local.
+Rendering performs no HTTP requests and launches no child processes. MathJax data, native Resvg code, optional font files, and Kitty's diacritic table are all local. Only an explicit image click or `/math-images open` launches the VS Code CLI to open a private PNG snapshot; no rendering/scrolling callback does so.
 
 ## Resource limits
 
